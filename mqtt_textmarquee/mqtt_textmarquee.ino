@@ -27,7 +27,7 @@ bool klok_ok = false;
 // WiFi settings
 char ssid[] = "revspace-pub-2.4ghz";  //  your network SSID (name)
 char pass[] = "";       // your network password
-const char* mqtt_server = "test.mosquitto.org";
+const char* mqtt_server = "mosquitto.space.revspace.nl";
 
 // Timezone Rules for Europe
 // European Daylight time begins on the last sunday of March
@@ -121,14 +121,11 @@ void loop()
 
 
   if (state == HIGH) {
-  
     printTime(now());
-    
   } else {
     // Low-power-mode
     display.scroll("          ", 100);
   }
-
 
   // NTP sync every 3 hours.
   if (hour(now()) % 3 == 0 && minute(now()) == 0 && second(now()) == 0) {
@@ -138,23 +135,31 @@ void loop()
   if (!klok_ok) {
     ntpsync();
   }
-
-  // Need to add a if NTPsync fail fallback option.
 }
+
+
+
+
+
+
 
 boolean reconnect() {
   if (client.connect("ESP-krant")) {
     // Once connected, publish an announcement...
     client.publish("revspace/espkrant", "hello world");
     // ... and resubscribe
-    client.subscribe("revspace/cams");
-    client.loop();
     client.subscribe("revspace/state");
     client.loop();
     client.subscribe("revspace/button/nomz");
     client.loop();
-    client.subscribe("revspace/spacesucker/#");
+    client.subscribe("revspace/button/doorbell");
     client.loop();
+
+    client.subscribe("revspace/sensors/co2");
+    client.loop();
+    client.subscribe("revspace/sensors/humidity");
+    client.loop();
+
   }
   return client.connected();
 }
@@ -242,13 +247,6 @@ unsigned long sendNTPpacket(IPAddress& address)
 void printTime(time_t t)
 {
 
-  //Serial.print("Het is nu: " );
-  //Serial.print(hour(t));
-  //Serial.print(":");
-  //Serial.print(minute(t));
-  //Serial.print(":");
-  //Serial.println(second(t));
-
   String stringOne = " ";
   if (hour(t) < 10) {
     stringOne += "0";
@@ -276,13 +274,6 @@ void printTime(time_t t)
 void printDate(time_t t)
 {
 
-  //Serial.print("Het is nu: " );
-  //Serial.print(day(t));
-  //Serial.print("-");
-  //Serial.print(month(t));
-  //Serial.print("-");
-  //Serial.println(year(t));
-
   String stringOne = "";
   if (day(t) < 10) {
     stringOne += "0";
@@ -308,7 +299,7 @@ void printDate(time_t t)
 void onMqttMessage(char* topic, byte* payload, unsigned int length) {
   uint16_t spaceCnt;
   uint8_t numCnt = 0;
-  char num[3] = "";
+
 
   char bericht[50] = "";
   for (uint8_t pos = 0; pos < length; pos++) {
@@ -358,67 +349,73 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
 
   }
 
-  if (strcmp(topic, "revspace/button/deurbel") == 0) {
-    display.scroll(" deurbel. ", 2000);
+  if (strcmp(topic, "revspace/button/doorbell") == 0) {
+    display.scroll(" deurbel ", 2000);
   }
 
-  if (strcmp(topic, "revspace/spacesucker/level") == 0) {
-    for (uint8_t tel = 0; tel < 5; tel++) {
-      suckerpower[tel] = bericht[tel];
+  if (strcmp(topic, "revspace/sensors/co2") == 0) {
+    char num[4] = "";
+    spaceCnt = 0;
+    numCnt = 0;
+    uint16_t waarde = 0;
+
+
+    while (((uint8_t)payload[spaceCnt] != 32) && (spaceCnt <= length) && (numCnt < 4)) {
+      num[numCnt] = payload[spaceCnt];
+      numCnt++;
+      spaceCnt++;
     }
-  }
-
-  if (strcmp(topic, "revspace/spacesucker/level") == 0) {
-    for (uint8_t tel = 0; tel < 7; tel++) {
-      suckermode[tel] = bericht[tel];
+    if (numCnt > 0) {
+      waarde = atoi(&num[0]);
     }
-  }
+    Serial.print("co2: ");
+    Serial.print(waarde);
+    Serial.println(" PPM");
 
-  if (strcmp(topic, "revspace/cams") == 0) {
-    // This part was written by Benadski@Revspace, many thanks!
-    // Modified it so the function fills an array with all available cam-stats
-
-    for (uint8_t teller = 0; teller < 10; teller++) {
-      spaceCnt = 0;
-      numCnt = 0;
-      memset(num, 0, sizeof(num));
-
-      for (uint8_t skip = 0; skip < teller; skip++) {
-        while (((uint8_t)payload[spaceCnt] != 32) && (spaceCnt < length)) {
-          spaceCnt++;
-        }
-        if (((uint8_t)payload[spaceCnt] == 32) && (spaceCnt < length)) spaceCnt++;
-      }
-
-      while (((uint8_t)payload[spaceCnt] != 32) && (spaceCnt <= length) && (numCnt < 3)) {
-        num[numCnt] = payload[spaceCnt];
-        numCnt++;
-        spaceCnt++;
-      }
-      if (numCnt > 0) {
-        gluurders[teller] = atoi(&num[0]);
+    if (waarde > 1600) {
+      for (uint8_t tel = 0; tel < 10; tel++) {
+        display.scroll("CO2-DANGER", 50);
+        display.scroll(" ", 50);
       }
     }
 
-    if (gluurders[0] > 0) {
 
-      Serial.println("Aantal gluurders");
-      for (uint8_t teller = 0; teller < 10; teller++) {
-        if (gluurders[teller] > 0) {
-          if (teller == 0) {
-            Serial.print("Totaal");
-          } else {
-            Serial.print("Cam ");
-            Serial.print(teller);
-          }
-          Serial.print(": ");
-          Serial.println(gluurders[teller]);
-        }
-      }
-    } else {
-      Serial.println("geen gluurders :(");
-    }
   }
+
+  if (strcmp(topic, "revspace/sensors/humidity") == 0) {
+    char num[2] = "";
+    spaceCnt = 0;
+    numCnt = 0;
+    uint16_t waarde = 0;
+
+
+    while (((uint8_t)payload[spaceCnt] != 46) && (spaceCnt <= length) && (numCnt < 2)) {
+      num[numCnt] = payload[spaceCnt];
+      numCnt++;
+      spaceCnt++;
+    }
+    if (numCnt > 0) {
+      waarde = atoi(&num[0]);
+    }
+    Serial.print("Humidity: ");
+    Serial.print(waarde);
+    Serial.println("");
+    if (waarde < 32) {
+      for (uint8_t tel = 0; tel < 10; tel++) {
+        display.scroll("ZAPGEVAAR", 20);
+        display.scroll(" ZAPGEVAAR", 20);
+      }
+            for (uint8_t tel = 0; tel < 5; tel++) {
+        display.scroll("DROGE     ", 20);
+        display.scroll("     LUCHT", 20);
+      }
+    }
+
+  }
+
+
+
+
   Serial.println();
 }
 
