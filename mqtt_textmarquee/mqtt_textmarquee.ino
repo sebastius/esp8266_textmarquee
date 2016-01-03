@@ -1,3 +1,5 @@
+
+
 /*
 It's finally here!
 */
@@ -8,58 +10,47 @@ It's finally here!
 #include <WiFiUdp.h>
 #include <WiFiClient.h>
 
-#include <Time.h>        //http://www.arduino.cc/playground/Code/Time
-#include <Timezone.h>    //https://github.com/JChristensen/Timezone < i modified timezone.cpp to remove the EEPROM functions
+#include <Time.h>         //http://www.arduino.cc/playground/Code/Time
+#include <Timezone.h>     //https://github.com/LelandSindt/Timezone
 
-#include <PubSubClient.h>
+#include <PubSubClient.h> //https://github.com/knolleary/pubsubclient/releases/tag/2.4
 
-#include <Sixteen.h>
+#include <Sixteen.h>      //https://github.com/qguv/libm5451
 
 Sixteen display = Sixteen();
 
-static uint8_t CAM = 0; //Cam choice, 0 is total of all cams.
-int gluurders[10];
-uint16_t old_gluur;
-bool state;
+bool spacestate;
 bool klok_ok = false;
-
 
 // WiFi settings
 char ssid[] = "revspace-pub-2.4ghz";  //  your network SSID (name)
 char pass[] = "";       // your network password
-const char* mqtt_server = "mosquitto.space.revspace.nl";
+
 
 // Timezone Rules for Europe
 // European Daylight time begins on the last sunday of March
 // European Standard time begins on the last sunday of October
-// Officially both around 2 AM, but let's keep things simple.
+// I hope i got the correct hour set for the time-change rule (5th parameter in the rule).
 
-TimeChangeRule CEST = {"CEST", Last, Sun, Mar, 1, +120};    //Daylight time = UTC +2 hours
-TimeChangeRule CET = {"CET", Last, Sun, Oct, 1, +60};     //Standard time = UTC +1 hours
+TimeChangeRule CEST = {"CEST", Last, Sun, Mar, 2, +120};    //Daylight time = UTC +2 hours
+TimeChangeRule CET = {"CET", Last, Sun, Oct, 3, +60};     //Standard time = UTC +1 hours
 Timezone myTZ(CEST, CET);
 TimeChangeRule *tcr;        //pointer to the time change rule, use to get TZ abbrev
 time_t utc, local;
 
-// NTP Server settings
+// NTP Server settings and preparations
 unsigned int localPort = 2390;      // local port to listen for UDP packets
 IPAddress timeServerIP; // time.nist.gov NTP server address
 const char* ntpServerName = "pool.ntp.org";
 const int NTP_PACKET_SIZE = 48; // NTP time stamp is in the first 48 bytes of the message
 byte packetBuffer[ NTP_PACKET_SIZE]; //buffer to hold incoming and outgoing packets
-
-// A UDP instance to let us send and receive packets over UDP
 WiFiUDP udp;
 
+// MQTT Server settings and preparations
+const char* mqtt_server = "mosquitto.space.revspace.nl";
 WiFiClient espClient;
 PubSubClient client(mqtt_server, 1883, onMqttMessage, espClient);
-
-
-long lastMsg = 0;
-char msg[50];
-int value = 0;
 long lastReconnectAttempt = 0;
-char suckermode[7];
-char suckerpower[5];
 
 void setup()
 {
@@ -92,13 +83,10 @@ void setup()
   Serial.println("IP address: ");
   Serial.println(WiFi.localIP());
 
-
-
-
   udp.begin(localPort);
   ntpsync();
 
-  state = HIGH; // so we get display before receiving MQTT Space State message
+  spacestate = HIGH; // so we get display before receiving MQTT Space State message
 
 }
 
@@ -120,7 +108,7 @@ void loop()
   }
 
 
-  if (state == HIGH) {
+  if (spacestate == HIGH) {
     printTime(now());
   } else {
     // Low-power-mode
@@ -241,9 +229,6 @@ unsigned long sendNTPpacket(IPAddress& address)
 }
 
 
-
-
-
 void printTime(time_t t)
 {
 
@@ -263,7 +248,6 @@ void printTime(time_t t)
     stringOne += "0";
   }
   stringOne += second(t);
-
 
   char charBuf[10];
   stringOne.toCharArray(charBuf, 10);
@@ -299,48 +283,51 @@ void printDate(time_t t)
 void onMqttMessage(char* topic, byte* payload, unsigned int length) {
   uint16_t spaceCnt;
   uint8_t numCnt = 0;
-
-
   char bericht[50] = "";
-  for (uint8_t pos = 0; pos < length; pos++) {
-    bericht[pos] = payload[pos];
-  }
-
-  // handle message arrived
-
+  
   Serial.print("received topic: ");
   Serial.println(topic);
   Serial.print("length: ");
   Serial.println(length);
-  Serial.print(" **** payload: ");
+  Serial.print("payload: ");
 
   Serial.println(bericht);
   Serial.println();
 
-  // Lets select a payload handler
+  // Lets select a topic/payload handler
+  // Some topics (buttons for example) don't need a specific payload handled, just a reaction to the topic. Saves a lot of time!
 
+
+  // Space State
   if (strcmp(topic, "revspace/state") == 0) {
+    for (uint8_t pos = 0; pos < length; pos++) {
+      bericht[pos] = payload[pos];
+    }
+
     if (strcmp(bericht, "open") == 0) {
       Serial.println("Revspace is open");
-      state = HIGH;
-    }
-    if (strcmp(bericht, "closed") == 0) {
+      if (spacestate == LOW) {
+        spacestate = HIGH;
+      }
+    } else { 
+      // If it ain't open, it's closed! (saves a lot of time doing strcmp).
       Serial.println("Revspace is dicht");
-      state = LOW;
-      display.scroll("[88888888]", 10);
-      display.scroll("-[888888]-", 10);
-      display.scroll("--[8888]--", 10);
-      display.scroll("---[88]---", 10);
-      display.scroll("----[]----", 10);
-      display.scroll("  --[]--  ", 10);
-      display.scroll("    []    ", 10);
-
+      if (spacestate == HIGH) {
+        spacestate = LOW;
+        display.scroll("[88888888]", 10);
+        display.scroll("-[888888]-", 10);
+        display.scroll("--[8888]--", 10);
+        display.scroll("---[88]---", 10);
+        display.scroll("----[]----", 10);
+        display.scroll("  --[]--  ", 10);
+        display.scroll("    []    ", 10);
+      }
     }
   }
 
+  // NOMZ because we are hungry! Lets join the blinking lights parade!
   if (strcmp(topic, "revspace/button/nomz") == 0) {
     for (uint8_t tel = 0; tel < 20; tel++) {
-
       display.scroll("   nomz   ", 50);
       display.scroll("          ", 10);
       display.scroll("nomz  nomz", 50);
@@ -349,16 +336,20 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
 
   }
 
+  // DOORBELL
   if (strcmp(topic, "revspace/button/doorbell") == 0) {
-    display.scroll(" deurbel ", 2000);
+    for (uint8_t tel = 0; tel < 10; tel++) {
+      display.scroll("  deurbel ", 20);
+      display.scroll("          ", 10);
+    }
   }
 
+  // CO2 measurements and alerts. Set to Revspace default like Ledbanner
   if (strcmp(topic, "revspace/sensors/co2") == 0) {
     char num[4] = "";
     spaceCnt = 0;
     numCnt = 0;
     uint16_t waarde = 0;
-
 
     while (((uint8_t)payload[spaceCnt] != 32) && (spaceCnt <= length) && (numCnt < 4)) {
       num[numCnt] = payload[spaceCnt];
@@ -378,16 +369,14 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
         display.scroll(" ", 50);
       }
     }
-
-
   }
 
+  // Humidity measurements and alerts. Set to Revspace default like Ledbanner
   if (strcmp(topic, "revspace/sensors/humidity") == 0) {
     char num[2] = "";
     spaceCnt = 0;
     numCnt = 0;
     uint16_t waarde = 0;
-
 
     while (((uint8_t)payload[spaceCnt] != 46) && (spaceCnt <= length) && (numCnt < 2)) {
       num[numCnt] = payload[spaceCnt];
@@ -405,18 +394,16 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
         display.scroll("ZAPGEVAAR", 20);
         display.scroll(" ZAPGEVAAR", 20);
       }
-            for (uint8_t tel = 0; tel < 5; tel++) {
+      for (uint8_t tel = 0; tel < 5; tel++) {
         display.scroll("DROGE     ", 20);
         display.scroll("     LUCHT", 20);
       }
     }
-
   }
-
-
-
 
   Serial.println();
 }
+
+
 
 
